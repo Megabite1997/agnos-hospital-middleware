@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hospital}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hospital}
+      POSTGRES_DB: ${POSTGRES_DB:-hospital_middleware}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Stand-in for https://hospital-a.api.co.th (see cmd/mockhis).
+  mock-his-a:
+    build: .
+    command: ["mockhis"]
+    environment:
+      PORT: "8081"
+    restart: unless-stopped
+
+  app:
+    build: .
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-hospital}:${POSTGRES_PASSWORD:-hospital}@postgres:5432/${POSTGRES_DB:-hospital_middleware}?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set (copy .env.example to .env)}
+      JWT_TTL: ${JWT_TTL:-24h}
+      HIS_TIMEOUT: ${HIS_TIMEOUT:-5s}
+      GIN_MODE: release
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-his-a:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
